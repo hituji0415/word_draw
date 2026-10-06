@@ -1041,6 +1041,16 @@ h1 rt{font-size:11px;}
   }
 }
 
+
+/* v119：図鑑などで続きを読み込むボタン */
+.dex-more{
+  display:block;
+  width:100%;
+  margin:12px 0 4px;
+  padding:12px!important;
+  font-size:11px!important;
+}
+
 </style>
 
 </head>
@@ -8432,28 +8442,53 @@ function renderItemsBatched(box, items, buildEl, keepHtml) {
   const showLoading = total >= 30;
   if (showLoading) box.classList.add("rendering");
 
-  let index = 0;
-  // v92：件数が多いときは一度に描く数を増やす
-  // （図鑑「すべて」7,000件超で、1フレーム25件だと約300フレーム＝5秒かかっていた）
-  const chunkSize = total > 3000 ? 600 : total > 1000 ? 200 : total > 300 ? 80 : 25;
-  // v115：画面に入れた要素が増えるほど1フレームの再描画が重くなり、
-  // 1万件超では全体で20秒かかることがあった。要素を画面外の断片に組み立て、
-  // すべて揃ってから一度だけ差し込むようにする。
-  const buffer = document.createDocumentFragment();
-  function step() {
-    if (renderTokens.get(box) !== token) { box.classList.remove("rendering"); return; }   // 新しい描画が始まったら中断
-    const end = Math.min(index + chunkSize, total);
-    for (; index < end; index++) {
-      buffer.appendChild(buildEl(items[index], index));
-    }
-    if (index < total) {
-      requestAnimationFrame(step);
-    } else {
-      box.appendChild(buffer);
-      if (showLoading) box.classList.remove("rendering");
-    }
+  // v119：全件を一度に組み立てると、1万件超でDOMが7万要素を超え、
+  // スマホで表示に16秒かかっていた。まず画面に入る分だけ描き、
+  // 下までスクロールしたときに続きを足す方式に変える。
+  // ただし分けるのは件数が多いときだけ。100連の結果などは全件そのまま描く。
+  const SPLIT_FROM = 300;    // これを超える件数のときだけ分割する
+  const split = total > SPLIT_FROM;
+  const FIRST = split ? 60 : total;   // 最初に描く数
+  const MORE = 60;                    // 読み進めるたびに足す数
+  let drawn = 0;
+
+  function appendSlice(n) {
+    const frag = document.createDocumentFragment();
+    const end = Math.min(drawn + n, total);
+    for (; drawn < end; drawn++) frag.appendChild(buildEl(items[drawn], drawn));
+    box.appendChild(frag);
   }
-  requestAnimationFrame(step);
+
+  // 残りがあることを示し、押すと続きを読み込む受け皿
+  function updateMore() {
+    let more = box.querySelector(".dex-more");
+    if (drawn >= total) { if (more) more.remove(); return; }
+    if (!more) {
+      more = document.createElement("button");
+      more.type = "button";
+      more.className = "utility-button dex-more";
+      more.onclick = () => { appendSlice(MORE * 3); updateMore(); };
+      box.appendChild(more);
+    } else {
+      box.appendChild(more);   // 常に末尾へ置き直す
+    }
+    more.textContent = `続きを表示（残り ${(total - drawn).toLocaleString()}件）`;
+  }
+
+  // 下端に近づいたら自動で足す
+  function onScroll() {
+    if (renderTokens.get(box) !== token) { window.removeEventListener("scroll", onScroll); return; }
+    if (drawn >= total) return;
+    const r = box.getBoundingClientRect();
+    if (r.bottom < window.innerHeight + 600) { appendSlice(MORE); updateMore(); }
+  }
+
+  appendSlice(FIRST);
+  updateMore();
+  if (showLoading) box.classList.remove("rendering");
+  window.removeEventListener("scroll", box._dexScroll || (() => {}));
+  box._dexScroll = onScroll;
+  window.addEventListener("scroll", onScroll, { passive: true });
 }
 
 // ================= 共通：結果の検索フィルタ =================
